@@ -1,0 +1,127 @@
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: minio_production
+    restart: always
+    environment:
+      # Production Credentials - GANTI USERNAME DAN PASSWORD INI!
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin_webakses}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Domain Configuration
+      MINIO_BROWSER: "on"
+      MINIO_BROWSER_REDIRECT_URL: https://files.webakses.com
+      # MINIO_SERVER_URL: https://s3.webakses.com
+      # CORS Configuration - untuk dashboard dan API
+      MINIO_API_CORS_ALLOW_ORIGIN: "https://files.webakses.com,https://webakses.com,https://puskesmasbatangsari.com,http://webakses.test,http://puskesmasbatangsari.test"
+      MINIO_API_CORS_ALLOW_METHODS: "GET,PUT,POST,DELETE,HEAD"
+      MINIO_API_CORS_ALLOW_HEADERS: "Authorization,Content-Type,Content-Length,X-Requested-With,x-amz-acl,x-amz-content-sha256,x-amz-date,x-amz-security-token,x-amz-user-agent"
+      MINIO_BROWSER_REDIRECT: "on"
+      # Security Settings - PENTING!
+      MINIO_BROWSER_LOGIN_ANIMATION: "off"
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+      # Performance & Compression
+      MINIO_COMPRESS: "on"
+      MINIO_COMPRESS_EXTENSIONS: ".txt,.log,.csv,.json,.tar,.xml,.bin"
+      MINIO_COMPRESS_MIME_TYPES: "text/*,application/json,application/xml"
+      # Region setting
+      MINIO_REGION: "us-east-1"
+      # API configuration - Rate limiting
+      MINIO_API_REQUESTS_MAX: 10000
+      MINIO_API_REQUESTS_DEADLINE: "10s"
+      # Security: Disable insecure endpoints
+      MINIO_API_ROOT_ACCESS: "off"
+      
+    command: server /data --console-address ":9001" --address ":9000"
+    
+    # CRITICAL: Bind hanya ke localhost (tidak expose ke public)
+    ports:
+      - "127.0.0.1:9000:9000"  # API port - localhost only
+      - "127.0.0.1:9001:9001"  # Console port - localhost only
+    
+    volumes:
+      - minio_data:/data
+      - minio_config:/root/.minio
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 15s
+    
+    networks:
+      - minio_network
+    
+    # Resource limits untuk production
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Security options - PENTING untuk production
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined
+    read_only: false
+    tmpfs:
+      - /tmp
+    
+    # User namespace remapping (jika diperlukan)
+    # user: "1000:1000"
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MinIO Setup Container - Auto create bucket & configure CORS
+  minio-setup:
+    image: minio/mc:latest
+    container_name: minio_setup_production
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - minio_network
+    volumes:
+      - ./setup-script.sh:/setup-script.sh:ro
+      - ./cors.json:/cors.json:ro
+    entrypoint: ["/bin/sh", "/setup-script.sh"]
+    restart: "no"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin_webakses}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  minio_network:
+    driver: bridge
+    name: minio_production_network
+    driver_opts:
+      com.docker.network.bridge.name: br-minio
+
+volumes:
+  minio_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /www/wwwroot/minio/data
+  
+  minio_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /www/wwwroot/minio/config
